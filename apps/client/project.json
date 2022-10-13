@@ -1,0 +1,55 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "@dibujito-it/client",
+  "projectType": "application",
+	"implicitDependencies": [
+	],
+  "targets": {
+		"prepare": {
+			"executor": "nx:run-commands",
+			"options": {
+				"commands": ["svelte-kit sync"],
+				"parallel": false,
+				"cwd": "apps/client"
+			}
+		},
+    "build": {
+      "executor": "nx:run-commands",
+			"dependsOn": [
+				"prepare"
+			],
+      "options": {
+        "command": "vite build",
+				"cwd": "apps/client"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vite dev",
+				"cwd": "apps/client"
+      }
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vite preview",
+				"cwd": "apps/client"
+      }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+				"cwd": "apps/client"
+      }
+    },
+    "check:watch": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+				"cwd": "apps/client"
+      }
+    }
+  }
+}
