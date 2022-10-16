@@ -23,10 +23,17 @@
 				"cwd": "apps/client"
       }
     },
-    "dev": {
+		"dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vite dev",
+				"command": "vite dev",
+				"cwd": "apps/client"
+      }
+    },
+		"devh": {
+      "executor": "nx:run-commands",
+      "options": {
+				"command": "vite dev --host",
 				"cwd": "apps/client"
       }
     },
