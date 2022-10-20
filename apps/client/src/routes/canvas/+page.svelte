@@ -1,20 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+
+	import type { LineDrawing } from '$lib';
+	import type { PageData } from './$types';
+
+	export let data: PageData;
 	
 	let canvas: HTMLCanvasElement;
 	let ctx: CanvasRenderingContext2D | null;
 
-	// MOVE this to a model library
-	type LineDrawing = {
-		x0: number
-		y0: number
-		x1: number
-		y1: number
-		color: string // hex
-		width: number // pixels
-	}
 	// this will probably have to change later on to be of a more general type
-	const drawings: LineDrawing[] = [];
+
+	const drawings: LineDrawing[] = data.drawings;
 
 	// cursor coordinates
   let cursorX: number; 
@@ -26,19 +23,24 @@
 	let clientHeight: number;
 
 	// distance to origin
-	let offsetX: number;
-	let offsetY: number;
+	let offsetX: number = 0;
+	let offsetY: number = 0;
 
 	// zoom quantity
 	let scale: number = 1;
 
 	let leftMouseDown = false;
+	let prevLeftMouseDown = false;
 	let rightMouseDown = false;
 
 	onMount(() => {
 		ctx = canvas.getContext('2d');
 
 		redrawCanvas(ctx!, canvas);
+
+		document.oncontextmenu = function () {
+			return false;
+		}
 
 		const clientResizeObserver = new ResizeObserver(() => {
 			redrawCanvas(ctx!, canvas);
@@ -66,20 +68,24 @@
 			);
     }
   }
-
   function toScreenX(trueX: number) {
-      return (trueX + offsetX) * scale;
+    return (trueX + offsetX) * scale;
   }
   function toScreenY(trueY: number) {
-      return (trueY + offsetY) * scale;
+    return (trueY + offsetY) * scale;
   }
 	function toTrueX(xScreen: number) {
-      return (xScreen / scale) - offsetX;
+    return (xScreen / scale) - offsetX;
   }
   function toTrueY(yScreen: number) {
-      return (yScreen / scale) - offsetY;
+    return (yScreen / scale) - offsetY;
   }
-
+	function trueHeight() {
+		return canvas.clientHeight / scale;
+	}
+	function trueWidth() {
+		return canvas.clientWidth / scale;
+	}
   function drawLine(
 		x0: number, 
 		y0: number, 
@@ -95,11 +101,11 @@
     ctx!.lineWidth = width;
     ctx!.stroke();
   }
-
 	function onMouseDown(event: MouseEvent) {
     // detect left clicks
     if (event.button == 0) {
         leftMouseDown = true;
+				prevLeftMouseDown = true;
         rightMouseDown = false;
     }
     // detect right clicks
@@ -137,7 +143,7 @@
  	        y1: scaledY,
 					color: dummyColor,
 					width: dummyWidth 
- 	    })
+ 	    });
  	    // draw a line
  	    drawLine(prevCursorX, prevCursorY, cursorX, cursorY, dummyColor, dummyWidth);
  	  }
@@ -150,11 +156,102 @@
  	  prevCursorX = cursorX;
  	  prevCursorY = cursorY;
 	}
-	function onMouseUp() {
+	function onMouseWheel(
+		event: WheelEvent,
+		ctx: CanvasRenderingContext2D,
+		canvas: HTMLCanvasElement
+	) {
+		const deltaY = event.deltaY; // mouse wheel movement delta
+		// counterintuitively, deltaY is negative when you zoom "in", that's the
+		// reason for the minus sign here
+		const scaleAmount = -deltaY / 500; 
+		scale = scale * (1 + scaleAmount);
+
+		const directionX = event.pageX / canvas.clientWidth;
+		const directionY = event.pageY / canvas.clientHeight;
+
+		const unitsZoomedX = trueWidth() * scaleAmount;
+		const unitsZoomedY = trueHeight() * scaleAmount;
+
+		const xStep = unitsZoomedX * directionX;
+		const yStep = unitsZoomedY * directionY;
+
+		offsetX -= xStep;
+		offsetY -= yStep;
+
+		redrawCanvas(ctx, canvas);
+	}
+	function onMouseUp(event: MouseEvent) {
 		leftMouseDown = false;
 		rightMouseDown = false;
 	}
 
+	// touch
+	const prevTouches = {} as TouchList;
+	let singleTouch = false;
+	let doubleTouch = false;
+	function onTouchStart(event: TouchEvent) {
+		if (event.touches.length === 1) {
+			singleTouch = true;
+			doubleTouch = false;
+		}
+		if (event.touches.length >= 2) {
+			singleTouch = false;
+			doubleTouch = true;
+		}
+		prevTouches[0] = event.touches[0];
+		prevTouches[1] = event.touches[1];
+	}
+	function onTouchMove(event: TouchEvent) {
+		// get first touch coordinates
+    const touch0X = event.touches[0].pageX;
+    const touch0Y = event.touches[0].pageY;
+    const prevTouch0X = prevTouches[0].pageX;
+    const prevTouch0Y = prevTouches[0].pageY;
+
+    const scaledX = toTrueX(touch0X);
+    const scaledY = toTrueY(touch0Y);
+    const prevScaledX = toTrueX(prevTouch0X);
+    const prevScaledY = toTrueY(prevTouch0Y);
+
+		const dummyColor = '#000';
+		const dummyWidth = 2;
+
+		if (singleTouch) {
+			drawings.push({
+				x0: prevScaledX, 
+				y0: prevScaledY,
+				x1: scaledX,
+				y1: scaledY,
+				color: dummyColor,
+				width: dummyWidth 
+			});
+			drawLine(prevTouch0X, prevTouch0Y, touch0X, touch0Y, dummyColor, dummyWidth);
+		}
+		if (doubleTouch) {
+	    // get second touch coordinates
+      const touch1X = event.touches[1].pageX;
+      const touch1Y = event.touches[1].pageY;
+      const prevTouch1X = prevTouches[1].pageX;
+      const prevTouch1Y = prevTouches[1].pageY;
+
+      // get midpoints
+      const midX = (touch0X + touch1X) / 2;
+      const midY = (touch0Y + touch1Y) / 2;
+      const prevMidX = (prevTouch0X + prevTouch1X) / 2;
+      const prevMidY = (prevTouch0Y + prevTouch1Y) / 2;
+
+      // calculate the distances between the touches
+      const hypot = Math.sqrt(Math.pow((touch0X - touch1X), 2) + Math.pow((touch0Y - touch1Y), 2));
+      const prevHypot = Math.sqrt(Math.pow((prevTouch0X - prevTouch1X), 2) + Math.pow((prevTouch0Y - prevTouch1Y), 2));
+
+			console.log('distance this', hypot);
+			console.log('distance prev', prevHypot);
+
+      prevTouches[0] = event.touches[0];
+      prevTouches[1] = event.touches[1];
+		}
+	}
 </script>
 
 <style>
@@ -166,8 +263,11 @@
 
 <canvas 
 	bind:this={canvas}
-	on:mousemove={(event) => ctx ? onMouseMove(event, ctx, canvas) : console.log('ctx is null')}
+	id="myCanvas" 
+
+	on:mousemove={(event) => { if (ctx) onMouseMove(event, ctx, canvas) }}
 	on:mousedown={onMouseDown}
 	on:mouseup={onMouseUp}
-	id="myCanvas" 
+	on:wheel={(event) => { if (ctx) onMouseWheel(event, ctx, canvas) }}
+
 ></canvas>
