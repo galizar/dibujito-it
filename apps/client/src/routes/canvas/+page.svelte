@@ -1,273 +1,149 @@
-<script lang="ts">
-	import { onMount } from 'svelte';
+<script lang=ts>
+	import { 
+		SVG, 
+		Svg, Rect, Line
+	} from '@svgdotjs/svg.js';
+	import { RectVector, LineVector } from '$lib';
+  import { onMount } from 'svelte';
+	import { writable } from 'svelte/store';
 
-	import type { LineDrawing } from '$lib';
-	import type { PageData } from './$types';
+	let elements: Record<string, Rect | Line> = {};
+	let elementsStore = writable(elements);
+	let elementCount = 0;
+	let toDraw: 'line' | 'rect' | 'text';
 
-	export let data: PageData;
-	
-	let canvas: HTMLCanvasElement;
-	let ctx: CanvasRenderingContext2D | null;
+	let focusedElementId: string = ''; // UUID
+	let isFocusedComplete: boolean;
+	let outlineEl: Line | Rect | undefined;
 
-	// this will probably have to change later on to be of a more general type
-
-	const drawings: LineDrawing[] = data.drawings;
-
-	// cursor coordinates
-  let cursorX: number; 
-  let cursorY: number;
-  let prevCursorX: number;
-  let prevCursorY: number;
-
-	let clientWidth: number;
-	let clientHeight: number;
-
-	// distance to origin
-	let offsetX: number = 0;
-	let offsetY: number = 0;
-
-	// zoom quantity
-	let scale: number = 1;
-
-	let leftMouseDown = false;
-	let prevLeftMouseDown = false;
-	let rightMouseDown = false;
+	$: {
+		console.log('element count:', elementCount);
+	}
 
 	onMount(() => {
-		ctx = canvas.getContext('2d');
 
-		redrawCanvas(ctx!, canvas);
-
-		document.oncontextmenu = function () {
-			return false;
-		}
+		// CURRENTLY DRAWING LINES
+		toDraw = 'line';
 
 		const clientResizeObserver = new ResizeObserver(() => {
-			redrawCanvas(ctx!, canvas);
+			draw.size(document.body.clientWidth, document.body.clientHeight);
 		});
 
 		clientResizeObserver.observe(document.body);
+
+		let draw = SVG()
+			.addTo('#drawing-board')
+			.size(document.body.clientWidth, document.body.clientHeight);
+		
+		draw.mousedown(async (event: MouseEvent) => {
+
+			const tar = event.target as HTMLElement;
+			const toFocusId = tar.getAttribute('data-id') ?? '';
+
+			if (focusedElementId && tar.nodeName === 'svg') {
+				// unselect element when clicking on canvas
+				isFocusedComplete = true;
+				focusedElementId = '';
+				removeOutline(draw);
+			} else if (event.button === 0 && tar.nodeName === 'svg') {
+ 				// drawing an element
+				const el = new LineVector(
+					draw, 
+					event.pageX,
+					event.pageY).value;
+				const id = await randomID();
+
+				addElement(id, el);
+
+				focusedElementId = id;
+			} else if (toFocusId) {
+				isFocusedComplete = true;
+				// selecting an element
+				focusedElementId = toFocusId;
+
+				const el = elements[focusedElementId];
+				el.front();
+
+				setOutline(draw, el);
+			}
+		});
+
+		draw.mousemove((event: MouseEvent) => {
+			if (focusedElementId && !isFocusedComplete) {
+				elements[focusedElementId].attr({x2: event.pageX, y2: event.pageY});
+			}
+
+			// moves outline to follow its host
+			if (outlineEl) {
+				setOutline(draw, elements[focusedElementId]);
+			}
+		});
+
+		// -- ADD TEST ELEMENTS --
+		(async () => {
+			const el = new RectVector(draw, 500, 500).value;
+			const id = await randomID();
+			addElement(id, el);
+		})();
+
+		(async () => {
+			const el = new RectVector(draw, 500, 600).value;
+			const id = await randomID();
+			addElement(id, el);
+		})();
+
+		(async () => {
+			const el = new RectVector(draw, 500, 700).value;
+			const id = await randomID();
+			addElement(id, el);
+		})();
+
+		(async () => {
+			const el = new LineVector(draw, 300, 300).value;
+			const id = await randomID();
+			addElement(id, el);
+		})();
+		// --
 	});
 
-  function redrawCanvas(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
-    // set the canvas to the size of the window
-    canvas.width = document.body.clientWidth;
-    canvas.height = document.body.clientHeight;
-
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-		ctx.strokeText(`${canvas.width} x ${canvas.height}`, 5, 10);
-    for (const line of drawings) {
-      drawLine(
-				toScreenX(line.x0), 
-				toScreenY(line.y0), 
-				toScreenX(line.x1), 
-				toScreenY(line.y1),
-				line.color,
-				line.width
-			);
-    }
-  }
-  function toScreenX(trueX: number) {
-    return (trueX + offsetX) * scale;
-  }
-  function toScreenY(trueY: number) {
-    return (trueY + offsetY) * scale;
-  }
-	function toTrueX(xScreen: number) {
-    return (xScreen / scale) - offsetX;
-  }
-  function toTrueY(yScreen: number) {
-    return (yScreen / scale) - offsetY;
-  }
-	function trueHeight() {
-		return canvas.clientHeight / scale;
-	}
-	function trueWidth() {
-		return canvas.clientWidth / scale;
-	}
-  function drawLine(
-		x0: number, 
-		y0: number, 
-		x1: number, 
-		y1: number,
-		color: string,
-		width: number
-	) {
-    ctx!.beginPath();
-    ctx!.moveTo(x0, y0);
-    ctx!.lineTo(x1, y1);
-    ctx!.strokeStyle = color;
-    ctx!.lineWidth = width;
-    ctx!.stroke();
-  }
-	function onMouseDown(event: MouseEvent) {
-    // detect left clicks
-    if (event.button == 0) {
-        leftMouseDown = true;
-				prevLeftMouseDown = true;
-        rightMouseDown = false;
-    }
-    // detect right clicks
-    if (event.button == 2) {
-        rightMouseDown = true;
-        leftMouseDown = false;
-    }
-    // update the cursor coordinates
-    cursorX = event.pageX;
-    cursorY = event.pageY;
-    prevCursorX = event.pageX;
-    prevCursorY = event.pageY;
-	}
-	function onMouseMove(
-		event: MouseEvent, 
-		ctx: CanvasRenderingContext2D, 
-		canvas: HTMLCanvasElement
-	) {
-		cursorX = event.pageX;
-		cursorY = event.pageY;
-		const scaledX = toTrueX(cursorX);
-		const scaledY = toTrueY(cursorY);
-		const prevScaledX = toTrueX(prevCursorX);
-		const prevScaledY = toTrueY(prevCursorY);
-
-		const dummyColor = '#000';
-		const dummyWidth = 2;
-
-		if (leftMouseDown) {
- 	    // add the line to our drawing history
- 	    drawings.push({
- 	        x0: prevScaledX,
- 	        y0: prevScaledY,
- 	        x1: scaledX,
- 	        y1: scaledY,
-					color: dummyColor,
-					width: dummyWidth 
- 	    });
- 	    // draw a line
- 	    drawLine(prevCursorX, prevCursorY, cursorX, cursorY, dummyColor, dummyWidth);
- 	  }
- 	  if (rightMouseDown) {
- 	    // move the screen
- 	    offsetX += (cursorX - prevCursorX) / scale;
- 	    offsetY += (cursorY - prevCursorY) / scale;
- 	    redrawCanvas(ctx, canvas);
- 	  }
- 	  prevCursorX = cursorX;
- 	  prevCursorY = cursorY;
-	}
-	function onMouseWheel(
-		event: WheelEvent,
-		ctx: CanvasRenderingContext2D,
-		canvas: HTMLCanvasElement
-	) {
-		const deltaY = event.deltaY; // mouse wheel movement delta
-		// counterintuitively, deltaY is negative when you zoom "in", that's the
-		// reason for the minus sign here
-		const scaleAmount = -deltaY / 500; 
-		scale = scale * (1 + scaleAmount);
-
-		const directionX = event.pageX / canvas.clientWidth;
-		const directionY = event.pageY / canvas.clientHeight;
-
-		const unitsZoomedX = trueWidth() * scaleAmount;
-		const unitsZoomedY = trueHeight() * scaleAmount;
-
-		const xStep = unitsZoomedX * directionX;
-		const yStep = unitsZoomedY * directionY;
-
-		offsetX -= xStep;
-		offsetY -= yStep;
-
-		redrawCanvas(ctx, canvas);
-	}
-	function onMouseUp(event: MouseEvent) {
-		leftMouseDown = false;
-		rightMouseDown = false;
+	async function randomID() {
+		// return self.crypto.randomUUID();
+		const res = await fetch('api/uuid');
+		return res.text();
 	}
 
-	// touch
-	const prevTouches = {} as TouchList;
-	let singleTouch = false;
-	let doubleTouch = false;
-	function onTouchStart(event: TouchEvent) {
-		if (event.touches.length === 1) {
-			singleTouch = true;
-			doubleTouch = false;
-		}
-		if (event.touches.length >= 2) {
-			singleTouch = false;
-			doubleTouch = true;
-		}
-		prevTouches[0] = event.touches[0];
-		prevTouches[1] = event.touches[1];
+	function addElement(id: string, el: Rect | Line) {
+		elementCount++;
+		elements[id] = el;
+		elementsStore.set(elements);
+		el.attr('data-id', id);
+		el.front();
 	}
-	function onTouchMove(event: TouchEvent) {
-		// get first touch coordinates
-    const touch0X = event.touches[0].pageX;
-    const touch0Y = event.touches[0].pageY;
-    const prevTouch0X = prevTouches[0].pageX;
-    const prevTouch0Y = prevTouches[0].pageY;
 
-    const scaledX = toTrueX(touch0X);
-    const scaledY = toTrueY(touch0Y);
-    const prevScaledX = toTrueX(prevTouch0X);
-    const prevScaledY = toTrueY(prevTouch0Y);
+	function setOutline(draw: Svg, el?: Rect | Line) {
 
-		const dummyColor = '#000';
-		const dummyWidth = 2;
+		removeOutline(draw);
+		
+		if (el) {
+			outlineEl = el.clone();
+			outlineEl.stroke({ color: 'grey', width: 8});
+			outlineEl.attr('stroke-linecap', 'round');
+			draw.add(outlineEl);
+			outlineEl.after(el);
+		} 
+	}
 
-		if (singleTouch) {
-			drawings.push({
-				x0: prevScaledX, 
-				y0: prevScaledY,
-				x1: scaledX,
-				y1: scaledY,
-				color: dummyColor,
-				width: dummyWidth 
-			});
-			drawLine(prevTouch0X, prevTouch0Y, touch0X, touch0Y, dummyColor, dummyWidth);
-		}
-		if (doubleTouch) {
-	    // get second touch coordinates
-      const touch1X = event.touches[1].pageX;
-      const touch1Y = event.touches[1].pageY;
-      const prevTouch1X = prevTouches[1].pageX;
-      const prevTouch1Y = prevTouches[1].pageY;
-
-      // get midpoints
-      const midX = (touch0X + touch1X) / 2;
-      const midY = (touch0Y + touch1Y) / 2;
-      const prevMidX = (prevTouch0X + prevTouch1X) / 2;
-      const prevMidY = (prevTouch0Y + prevTouch1Y) / 2;
-
-      // calculate the distances between the touches
-      const hypot = Math.sqrt(Math.pow((touch0X - touch1X), 2) + Math.pow((touch0Y - touch1Y), 2));
-      const prevHypot = Math.sqrt(Math.pow((prevTouch0X - prevTouch1X), 2) + Math.pow((prevTouch0Y - prevTouch1Y), 2));
-
-			console.log('distance this', hypot);
-			console.log('distance prev', prevHypot);
-
-      prevTouches[0] = event.touches[0];
-      prevTouches[1] = event.touches[1];
+	function removeOutline(draw: Svg) {
+		if (outlineEl) {
+			draw.removeElement(outlineEl);
+			outlineEl = undefined;
 		}
 	}
+
 </script>
 
-<style>
-	#myCanvas {
-		margin: 0;
-		padding: 0;
-	}
-</style>
+<div id="drawing-board">
 
-<canvas 
-	bind:this={canvas}
-	id="myCanvas" 
 
-	on:mousemove={(event) => { if (ctx) onMouseMove(event, ctx, canvas) }}
-	on:mousedown={onMouseDown}
-	on:mouseup={onMouseUp}
-	on:wheel={(event) => { if (ctx) onMouseWheel(event, ctx, canvas) }}
 
-></canvas>
+</div>
