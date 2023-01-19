@@ -27,7 +27,7 @@ export class LineVector {
 		x: number, 
 		y: number
 	) {
-		this.value = draw.line(x, y, x+5, y+5)
+		this.value = draw.line(x, y, x+20, y+20)
 			.stroke({ color: baseColor, width: 3});
 		
 		addGeneralBehavior(this.value);

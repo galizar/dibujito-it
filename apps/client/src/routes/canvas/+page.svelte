@@ -112,6 +112,11 @@
 		return res.text();
 	}
 
+	function drawStart(event: MouseEvent) {
+		// this function should handle the update of the current element being drawn
+		// register this function on either the main/parent SVG element or the window
+	}
+
 	function addElement(id: string, el: Rect | Line) {
 		elementCount++;
 		elements[id] = el;
