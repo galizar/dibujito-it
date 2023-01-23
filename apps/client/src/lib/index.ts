@@ -4,6 +4,19 @@ const baseColor = '#cdc';
 const hoverColor = '#8a8';
 // const eventNames: 'mousedown' | 'mouseup' | 'mousemove'
 
+type LineEndpoint = {
+	x2: number,
+	y2: number
+}
+
+export interface ElVector {
+  /* 
+		This function updates the element on transformations
+	*/	
+	value: Line | Rect;
+	update: (coords: LineEndpoint) => void;
+}
+
 export class RectVector {
 
 	value: Rect;
@@ -15,9 +28,8 @@ export class RectVector {
 	}
 } 
 
-export class LineVector {
+export class LineVector implements ElVector {
 	value: Line;
-	complete = false;
 
 	/** 
 	 * @param draw - The SVG
@@ -27,29 +39,14 @@ export class LineVector {
 		x: number, 
 		y: number
 	) {
-		this.value = draw.line(x, y, x+5, y+5)
+		this.value = draw.line(x, y, x, y)
 			.stroke({ color: baseColor, width: 3});
 		
 		addGeneralBehavior(this.value);
+	}
 
-		this.value.mousemove((event: MouseEvent) => {
-			if (!this.complete) {
-				this.value.attr({x2: event.pageX, y2: event.pageY});
-			}
-		});
-
-		this.value.mouseout((event: MouseEvent) => {
-			if (!this.complete) {
-				this.value.attr({x2: event.pageX, y2: event.pageY});
-			}
-		});
-
-		this.value.mousedown((event: MouseEvent) => {
-			if (!this.complete) {
-				this.value.attr({x2: event.pageX, y2: event.pageY});
-				this.complete = true;
-			}
-		});
+	update(coords: LineEndpoint) {
+		this.value.attr({x2: coords.x2, y2: coords.y2});
 	}
 }
 
