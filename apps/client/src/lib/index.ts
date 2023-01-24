@@ -1,4 +1,4 @@
-import type { Svg, Rect, Line } from '@svgdotjs/svg.js';
+import type { Svg, Rect, Line, Circle } from '@svgdotjs/svg.js';
 
 const baseColor = '#cdc';
 const hoverColor = '#8a8';
@@ -9,21 +9,29 @@ type LineEndpoint = {
 	y2: number
 }
 
+type PointCoords = {
+	cx: number,
+	cy: number
+}
+
 export interface ElVector {
+	value: Line | Rect;
+
   /* 
 		This function updates the element on transformations
 	*/	
-	value: Line | Rect;
 	update: (coords: LineEndpoint) => void;
+
+	getVertexPointsCoords: () => Array<PointCoords>;
 }
 
 export class RectVector {
 
 	value: Rect;
 
-	constructor(draw: Svg, x: number, y: number) {
+	constructor(svg: Svg, x: number, y: number) {
 
-		this.value = draw.rect(100, 100).move(x, y).fill({color: baseColor});
+		this.value = svg.rect(100, 100).move(x, y).fill({color: baseColor});
 		addGeneralBehavior(this.value);
 	}
 } 
@@ -31,15 +39,12 @@ export class RectVector {
 export class LineVector implements ElVector {
 	value: Line;
 
-	/** 
-	 * @param draw - The SVG
-	 */
 	constructor(
-		draw: Svg, 
+		svg: Svg, 
 		x: number, 
 		y: number
 	) {
-		this.value = draw.line(x, y, x, y)
+		this.value = svg.line(x, y, x, y)
 			.stroke({ color: baseColor, width: 3});
 		
 		addGeneralBehavior(this.value);
@@ -48,6 +53,32 @@ export class LineVector implements ElVector {
 	update(coords: LineEndpoint) {
 		this.value.attr({x2: coords.x2, y2: coords.y2});
 	}
+
+	getVertexPointsCoords() {
+		const start = {cx: this.value.attr('x1'), cy: this.value.attr('y1')};
+		const end = {cx: this.value.attr('x2'), cy: this.value.attr('y2')};
+
+		return [start, end];
+	}
+}
+
+export class VertexPoint {
+	point: Circle;
+
+	constructor(svg: Svg, cx: number, cy: number) {
+		const point = svg.circle(5).center(cx, cy);
+
+		point.mouseover((event: MouseEvent) => {
+			point.radius(10)
+		});
+
+		point.mouseout((event: MouseEvent) => {
+			point.radius(5);
+		});
+
+		this.point = point;
+	}
+
 }
 
 function addGeneralBehavior(el: Rect | Line) {

@@ -4,7 +4,7 @@
 		Svg, Rect, Line
 	} from '@svgdotjs/svg.js';
 	import type { ElVector } from '$lib';
-	import { RectVector, LineVector } from '$lib';
+	import { RectVector, LineVector, VertexPoint } from '$lib';
   import { onMount } from 'svelte';
 	import { writable } from 'svelte/store';
 
@@ -15,6 +15,7 @@
 
 	let focusedElementId: string = ''; // UUID
 	let outlineEl: Line | Rect | undefined;
+	let vertexPoints: Array<VertexPoint> | undefined;
 
 	$: {
 		console.log('element count:', elementCount);
@@ -57,7 +58,10 @@
 		})();
 
 		(async () => {
-			const el = new LineVector(draw, 300, 300).value;
+			const el = draw.line(300, 250, 467, 683).stroke({color: 'black', width: 3});
+			draw.circle(10).center(el.attr('x1'), el.attr('y1')).fill({color: 'black'});
+			draw.circle(10).center(el.attr('x2'), el.attr('y2')).fill({color: 'black'});
+
 			const id = await randomID();
 			addElement(id, el);
 		})();
@@ -152,6 +156,8 @@
 			outlineEl.after(el);
 		} 
 	}
+
+	//function setPoints(draw: Svg, ) {}
 
 	function removeOutline(draw: Svg) {
 		if (outlineEl) {
