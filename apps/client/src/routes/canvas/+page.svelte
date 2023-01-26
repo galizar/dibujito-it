@@ -3,11 +3,12 @@
 		SVG, 
 		Svg, Rect, Line
 	} from '@svgdotjs/svg.js';
+	import { RectVector, LineVector, VertexPoint, getVertexPointsCoords } from '$lib';
 	import type { ElVector } from '$lib';
-	import { RectVector, LineVector, VertexPoint } from '$lib';
   import { onMount } from 'svelte';
 	import { writable } from 'svelte/store';
 
+	let svg: Svg; // root SVG element
 	let elements: Record<string, Rect | Line> = {};
 	let elementsStore = writable(elements);
 	let elementCount = 0;
@@ -15,7 +16,7 @@
 
 	let focusedElementId: string = ''; // UUID
 	let outlineEl: Line | Rect | undefined;
-	let vertexPoints: Array<VertexPoint> | undefined;
+	let vertexPoints: Array<VertexPoint> = [];
 
 	$: {
 		console.log('element count:', elementCount);
@@ -25,43 +26,34 @@
 		// CURRENTLY DRAWING LINES
 		toDraw = 'line';
 
+		svg = SVG()
+			.addTo('#drawing-board')
+			.size(document.body.clientWidth, document.body.clientHeight);
+
+		svg.mousedown((event: MouseEvent) => clickHandler(event));
+		svg.mousemove((event: MouseEvent) => moveHandler(event));
+
 		const clientResizeObserver = new ResizeObserver(() => {
-			draw.size(document.body.clientWidth, document.body.clientHeight);
+			svg.size(document.body.clientWidth, document.body.clientHeight);
 		});
 
 		clientResizeObserver.observe(document.body);
 
-		let draw = SVG()
-			.addTo('#drawing-board')
-			.size(document.body.clientWidth, document.body.clientHeight);
-
-		draw.mousedown((event: MouseEvent) => clickHandler(event, draw));
-		draw.mousemove((event: MouseEvent) => moveHandler(event, draw));
-
 		// -- ADD TEST ELEMENTS --
 		(async () => {
-			const el = new RectVector(draw, 500, 500).value;
+			const el = new RectVector(svg, 500, 500).value;
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(draw, 500, 600).value;
+			const el = new RectVector(svg, 500, 600).value;
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(draw, 500, 700).value;
-			const id = await randomID();
-			addElement(id, el);
-		})();
-
-		(async () => {
-			const el = draw.line(300, 250, 467, 683).stroke({color: 'black', width: 3});
-			draw.circle(10).center(el.attr('x1'), el.attr('y1')).fill({color: 'black'});
-			draw.circle(10).center(el.attr('x2'), el.attr('y2')).fill({color: 'black'});
-
+			const el = new RectVector(svg, 500, 700).value;
 			const id = await randomID();
 			addElement(id, el);
 		})();
@@ -74,14 +66,15 @@
 		return res.text();
 	}
 
-	async function clickHandler(event: MouseEvent, svg: Svg) {
+	async function clickHandler(event: MouseEvent) {
 		const tar = event.target as HTMLElement;
 		const toFocusId = tar.getAttribute('data-id') ?? '';
 
 		if (focusedElementId && tar.nodeName === 'svg') {
 			// unselect element when clicking on canvas
 			focusedElementId = '';
-			removeOutline(svg);
+			clearVertexPoints();
+			removeOutline();
 		} else if (event.button === 0 && tar.nodeName === 'svg') {
  			// drawing an element
 			const el = new LineVector(
@@ -89,36 +82,54 @@
 				event.pageX,
 				event.pageY);
 			const id = await randomID();
-
-			addElement(id, el.value);
-
 			focusedElementId = id;
 
-			drawStart(event, svg, el);
+			addElement(id, el.value);
+			drawStart(event, el);
 
-		} else if (toFocusId) {
-			// selecting an element
+		} else if (toFocusId) { // selecting an element
 			focusedElementId = toFocusId;
 
 			const el = elements[focusedElementId];
 			el.front();
 
-			setOutline(svg, el);
+			drawVertexPoints(el);
+			setOutline(el);
 		}
 	}
 
-	function moveHandler(event: MouseEvent, svg: Svg) {
+	function drawVertexPoints(el: Line | Rect) {
+		
+		clearVertexPoints();
+		const vtxCoords = getVertexPointsCoords(el);
+		for (const point of vtxCoords) {
+			const vtxp = new VertexPoint(svg, point.cx, point.cy);
+			vertexPoints.push(vtxp)
+		}
+	}
+
+	function clearVertexPoints() {
+
+		for (const p of vertexPoints) {
+			svg.removeElement(p.value);
+		}
+		vertexPoints = [];
+	}
+
+	function moveHandler(event: MouseEvent) {
 		// moves outline to follow its host
-		if (outlineEl) {
-			setOutline(svg, elements[focusedElementId]);
+		if (focusedElementId !== '') {
+			const el = elements[focusedElementId];
+			setOutline(el);
+			drawVertexPoints(el);
 		}
 	}
 
-	function drawStart(event: MouseEvent, svg: Svg, el: ElVector) {
+	function drawStart(event: MouseEvent, el: ElVector) {
 		// bind mouse movement to update drawing
 		svg.mousemove((event: MouseEvent) => {
 			el.update({x2: event.pageX, y2: event.pageY});
-			setOutline(svg, el.value);
+			setOutline(el.value);
 		});
 
 		// when a second click is made the drawing process will stop
@@ -132,8 +143,8 @@
 		svg.off();
 
 		// reset handlers
-		svg.mousedown((event: MouseEvent) => clickHandler(event, svg));
-		svg.mousemove((event: MouseEvent) => moveHandler(event, svg));
+		svg.mousedown((event: MouseEvent) => clickHandler(event));
+		svg.mousemove((event: MouseEvent) => moveHandler(event));
 	}
 
 	function addElement(id: string, el: Rect | Line) {
@@ -144,24 +155,22 @@
 		el.front();
 	}
 
-	function setOutline(draw: Svg, el?: Rect | Line) {
+	function setOutline(el?: Rect | Line) {
 
-		removeOutline(draw);
+		removeOutline();
 		
 		if (el) {
 			outlineEl = el.clone();
-			outlineEl.stroke({ color: 'grey', width: 8});
+			outlineEl.stroke({ color: 'grey', width: 6});
 			outlineEl.attr('stroke-linecap', 'round');
-			draw.add(outlineEl);
+			svg.add(outlineEl);
 			outlineEl.after(el);
 		} 
 	}
 
-	//function setPoints(draw: Svg, ) {}
-
-	function removeOutline(draw: Svg) {
+	function removeOutline() {
 		if (outlineEl) {
-			draw.removeElement(outlineEl);
+			svg.removeElement(outlineEl);
 			outlineEl = undefined;
 		}
 	}

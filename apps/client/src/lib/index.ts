@@ -1,4 +1,5 @@
 import type { Svg, Rect, Line, Circle } from '@svgdotjs/svg.js';
+import { match, P } from 'ts-pattern';
 
 const baseColor = '#cdc';
 const hoverColor = '#8a8';
@@ -63,23 +64,49 @@ export class LineVector implements ElVector {
 }
 
 export class VertexPoint {
-	point: Circle;
+	value: Circle;
 
 	constructor(svg: Svg, cx: number, cy: number) {
-		const point = svg.circle(5).center(cx, cy);
+		const point = svg.circle(8).center(cx, cy).fill('lightgrey');
+
+		point.front();
 
 		point.mouseover((event: MouseEvent) => {
-			point.radius(10)
+			point.radius(5)
 		});
 
 		point.mouseout((event: MouseEvent) => {
-			point.radius(5);
+			point.radius(4);
 		});
 
-		this.point = point;
+		this.value = point;
 	}
-
 }
+
+export const getVertexPointsCoords = (
+  el: Line | Rect
+): Array<PointCoords> =>
+  match(el.type)
+    .with('rect', () => {
+			const x = <number>el.x();
+			const y = <number>el.y();
+			const width = <number>el.width();
+			const height = <number>el.height();
+
+      return [
+				{cx: x, cy: y},
+				{cx: x + width, cy: y},
+				{cx: x, cy: y + height},
+				{cx: x + width, cy: y + height}
+			];
+    })
+    .with('line', () => {
+      const start = { cx: el.attr('x1'), cy: el.attr('y1') };
+      const end = { cx: el.attr('x2'), cy: el.attr('y2') };
+
+      return [start, end];
+    })
+		.run()
 
 function addGeneralBehavior(el: Rect | Line) {
 	el.mouseover(() => {
