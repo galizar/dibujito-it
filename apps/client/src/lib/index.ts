@@ -1,91 +1,252 @@
 import type { Svg, Rect, Line, Circle } from '@svgdotjs/svg.js';
+import type { Subscription } from 'rxjs';
+import { Observable, BehaviorSubject } from 'rxjs';
 import { match, P } from 'ts-pattern';
 
 const baseColor = '#cdc';
 const hoverColor = '#8a8';
 // const eventNames: 'mousedown' | 'mouseup' | 'mousemove'
 
-type LineEndpoint = {
+type PointMetadata = {
+	cx: number,
+	cy: number,
+}
+
+type ElVectorAttrs = 
+	| RectAttributes
+	| LineAttributes
+	| VtxPointAttrs
+	| OutlineElAttrs;
+
+type ElVectorAttrsSubject = 
+	| BehaviorSubject<RectAttributes>
+	| BehaviorSubject<LineAttributes>
+	| BehaviorSubject<VtxPointAttrs>
+	| BehaviorSubject<OutlineElAttrs>;
+
+type CoordDiffs = {dx: number, dy: number};
+
+export abstract class ElVector {
+	value: Line | Rect | Circle;
+	abstract attrs: ElVectorAttrsSubject;
+	#subscriptionTracker: Array<Subscription> = [];
+	/* stream of position differentials */
+	coordDiffs = new BehaviorSubject({dx: 0, dy: 0});
+
+	constructor(it: Line | Rect | Circle) {
+    let mouseX: number;
+    let mouseY: number;
+    let prevMouseX: number;
+    let prevMouseY: number;
+		let leftMouseDown = false;
+
+    it.mousemove((event: MouseEvent) => {
+      mouseX = event.pageX;
+      mouseY = event.pageY;
+
+      if (leftMouseDown) {
+        const mouseDeltaX = mouseX - prevMouseX;
+        const mouseDeltaY = mouseY - prevMouseY;
+
+        it.dmove(mouseDeltaX, mouseDeltaY);
+				this.coordDiffs.next({dx: mouseDeltaX, dy: mouseDeltaY});
+      }
+
+      prevMouseX = mouseX;
+      prevMouseY = mouseY;
+    });
+
+    it.mousedown((event: MouseEvent) => {
+      if (event.button === 0) {
+        leftMouseDown = true;
+      }
+    });
+
+    it.mouseup(() => {
+			// dragging finished
+      leftMouseDown = false;
+			this.coordDiffs.next({dx: 0, dy: 0});
+    });
+
+    it.mouseout((event: MouseEvent) => {
+      const rTar = event.relatedTarget as HTMLElement;
+
+      if (leftMouseDown && rTar.nodeName !== 'HTML') {
+        // runs when dragging and the cursor "escapes" the area of the element
+        mouseX = event.pageX;
+        mouseY = event.pageY;
+
+        const mouseDeltaX = mouseX - prevMouseX;
+        const mouseDeltaY = mouseY - prevMouseY;
+
+        it.dmove(mouseDeltaX, mouseDeltaY);
+				this.coordDiffs.next({dx: mouseDeltaX, dy: mouseDeltaY});
+
+        prevMouseX = mouseX;
+        prevMouseY = mouseY;
+      } 
+    });
+
+		this.value = it;
+  }
+
+	registerStreamToAttributesMapper<TStream>(
+		sourceStream: Observable<TStream>,
+		mapperFunction: (stream: TStream) => Partial<ElVectorAttrs>
+	) {
+		const sub = sourceStream.subscribe((stream) => {
+      const mappedAttrs = mapperFunction(stream);
+
+      this.value.attr(mappedAttrs);
+    });
+
+		this.#subscriptionTracker.push(sub);
+	}
+
+	/* Used to "connect" the position of elements, i.e. make the element mimic
+	 * movement of other element */
+	listenForCoordDiffs(
+		diffsStream: Observable<CoordDiffs>,
+	) {
+		const sub = diffsStream.subscribe(({dx, dy}) => {
+			this.value.dmove(dx, dy);
+		});
+
+		this.#subscriptionTracker.push(sub);
+	}
+
+	onDestroy() {
+		this.clearSubscriptions();
+	}
+
+	clearSubscriptions() {
+		for (const sub of this.#subscriptionTracker) sub.unsubscribe();
+	}
+}
+
+type RectAttributes = {
+	x: number,
+	y: number,
+	width: number,
+	height: number
+}
+
+export class RectVector extends ElVector {
+
+	#attrsSource: RectAttributes = {x: -1, y: -1, width: -1, height: -1};
+	attrs: BehaviorSubject<RectAttributes> = new BehaviorSubject(this.#attrsSource);
+
+	constructor(
+		svg: Svg, 
+		x: number, y: number
+	) {
+		const baseWidth = 100;
+		const baseHeight = 100;
+
+		const it = svg.rect(baseWidth, baseHeight)
+			.move(x, y)
+			.fill({color: baseColor});
+		
+		super(it);
+		
+		this.attrs.next({x, y, width: baseWidth, height: baseHeight});
+	}
+} 
+
+type LineAttributes = {
+	x1: number,
+	y1: number,
 	x2: number,
 	y2: number
 }
 
-type PointCoords = {
-	cx: number,
-	cy: number
-}
+export class LineVector extends ElVector {
 
-export interface ElVector {
-	value: Line | Rect;
-
-  /* 
-		This function updates the element on transformations
-	*/	
-	update: (coords: LineEndpoint) => void;
-
-	getVertexPointsCoords: () => Array<PointCoords>;
-}
-
-export class RectVector {
-
-	value: Rect;
-
-	constructor(svg: Svg, x: number, y: number) {
-
-		this.value = svg.rect(100, 100).move(x, y).fill({color: baseColor});
-		addGeneralBehavior(this.value);
-	}
-} 
-
-export class LineVector implements ElVector {
-	value: Line;
+	#attrsSource = {x1: -1, y1: -1, x2: -1, y2: -1};
+	attrs = new BehaviorSubject(this.#attrsSource);
 
 	constructor(
 		svg: Svg, 
 		x: number, 
 		y: number
 	) {
-		this.value = svg.line(x, y, x, y)
+		const it = svg.line(x, y, x, y)
 			.stroke({ color: baseColor, width: 3});
 		
-		addGeneralBehavior(this.value);
-	}
+		super(it);
 
-	update(coords: LineEndpoint) {
-		this.value.attr({x2: coords.x2, y2: coords.y2});
-	}
-
-	getVertexPointsCoords() {
-		const start = {cx: this.value.attr('x1'), cy: this.value.attr('y1')};
-		const end = {cx: this.value.attr('x2'), cy: this.value.attr('y2')};
-
-		return [start, end];
+		this.attrs.next({x1: x, y1: y, x2: x, y2: y});
 	}
 }
 
-export class VertexPoint {
-	value: Circle;
+type VtxPointAttrs = {
+	cx: number,
+	cy: number
+}
 
-	constructor(svg: Svg, cx: number, cy: number) {
-		const point = svg.circle(8).center(cx, cy).fill('lightgrey');
+export class VertexPoint extends ElVector {
 
-		point.front();
+	#attrsSource = {cx: -1, cy: -1};
+	attrs = new BehaviorSubject(this.#attrsSource);
 
-		point.mouseover((event: MouseEvent) => {
-			point.radius(5)
+	constructor(
+		cx: number, 
+		cy: number, 
+		svg: Svg,
+		host: ElVector
+	) {
+		const it = svg.circle(8).center(cx, cy).fill('lightgrey');
+
+		it.front();
+
+		it.mouseover((event: MouseEvent) => {
+			it.radius(5)
 		});
 
-		point.mouseout((event: MouseEvent) => {
-			point.radius(4);
+		it.mouseout((event: MouseEvent) => {
+			it.radius(4);
 		});
 
-		this.value = point;
+		super(it);
+
+		this.attrs.next({cx, cy});
+		this.listenForCoordDiffs(host.coordDiffs);
+	}
+}
+
+type OutlineElAttrs = {
+	x: number,
+	y: number,
+}
+
+export class OutlineElement extends ElVector {
+
+	#attrsSource = {x: -1, y: -1};
+	attrs = new BehaviorSubject(this.#attrsSource);
+
+	constructor(
+		host: ElVector, 
+		svg: Svg
+	) {
+		const it = host.value.clone();
+
+		svg.add(it);
+		it.stroke({ color: 'grey', width: 6});
+		it.attr('stroke-linecap', 'round');
+		it.after(host.value);
+
+		it.off(); // clear all event handlers coming from the host
+
+		super(it);
+
+		this.attrs.next({x: <number>it.x(), y: <number>it.y()});
+		this.listenForCoordDiffs(host.coordDiffs);
 	}
 }
 
 export const getVertexPointsCoords = (
-  el: Line | Rect
-): Array<PointCoords> =>
+  el: Line | Rect | Circle
+): Array<PointMetadata> =>
   match(el.type)
     .with('rect', () => {
 			const x = <number>el.x();
@@ -94,79 +255,34 @@ export const getVertexPointsCoords = (
 			const height = <number>el.height();
 
       return [
-				{cx: x, cy: y},
-				{cx: x + width, cy: y},
-				{cx: x, cy: y + height},
-				{cx: x + width, cy: y + height}
+				{
+					cx: x, 
+					cy: y, 
+				},
+				{
+					cx: x + width, 
+					cy: y, 
+				},
+				{
+					cx: x, 
+					cy: y + height, 
+				},
+				{
+					cx: x + width, 
+					cy: y + height, 
+				}
 			];
     })
     .with('line', () => {
-      const start = { cx: el.attr('x1'), cy: el.attr('y1') };
-      const end = { cx: el.attr('x2'), cy: el.attr('y2') };
-
-      return [start, end];
+      return [
+        {
+          cx: el.attr('x1'),
+          cy: el.attr('y1'),
+        },
+				{
+					cx: el.attr('x2'), 
+					cy: el.attr('y2'), 
+				}
+      ];
     })
 		.run()
-
-function addGeneralBehavior(el: Rect | Line) {
-	el.mouseover(() => {
-		el.fill({color: hoverColor});
-		el.stroke({color: hoverColor});
-	});
-
-	let mouseX: number;
-	let mouseY: number;
-	let prevMouseX: number;
-	let prevMouseY: number;
-
-	el.mousemove((event: MouseEvent) => {
-
-		mouseX = event.pageX;
-		mouseY = event.pageY;
-
-		if (leftMouseDown) {
-			const mouseDeltaX = mouseX - prevMouseX;
-			const mouseDeltaY = mouseY - prevMouseY;
-
-			el.dmove(mouseDeltaX, mouseDeltaY);
-		}
-
-		prevMouseX = mouseX;
-		prevMouseY = mouseY;
-	});
-
-	let leftMouseDown = false;
-
-	el.mousedown((event: MouseEvent) => {
-		if (event.button === 0) {
-			leftMouseDown = true;
-		}
-	});
-
-	el.mouseup(() => {
-		leftMouseDown = false;
-	});
-
-	el.mouseout((event: MouseEvent) => {
-
-		const rTar = event.relatedTarget as HTMLElement;
-
-		if (leftMouseDown && rTar.nodeName !== 'HTML') {
-			// runs when dragging and the cursor "escapes" the area of the element
-			mouseX = event.pageX;
-			mouseY = event.pageY;
-
-			const mouseDeltaX = mouseX - prevMouseX;
-			const mouseDeltaY = mouseY - prevMouseY;
-
-			el.dmove(mouseDeltaX, mouseDeltaY);
-
-			prevMouseX = mouseX;
-			prevMouseY = mouseY;
-		} else {
-			el.fill({ color: baseColor});
-			el.stroke({color: baseColor});
-			leftMouseDown = false;
-		}
-	});
-}
