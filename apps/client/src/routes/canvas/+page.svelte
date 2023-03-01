@@ -12,8 +12,8 @@
 	import type { ElVector } from '$lib';
   import { onMount } from 'svelte';
 	import { writable } from 'svelte/store';
-	import type { Observable } from 'rxjs';
-	import { fromEvent, map } from 'rxjs';
+	import { fromEvent, map, merge, type Observable } from 'rxjs';
+  import { match } from 'ts-pattern';
 
 	let svg: Svg; // root SVG element
 	let elements: Record<string, ElVector> = {};
@@ -26,6 +26,7 @@
 	let vertexPoints: Array<VertexPoint> = [];
 
 	let mouseCoord$: Observable<{x: number, y: number}>;
+	let leftMouseDown$: Observable<boolean>;
 
 	$: {
 		console.log('element count:', elementCount);
@@ -51,24 +52,35 @@
 
 		mouseCoord$ = fromEvent<MouseEvent>(window, 'mousemove')
 			.pipe(map(event => ({x: event.pageX, y: event.pageY})));
+		
+		leftMouseDown$ = merge(
+			fromEvent<MouseEvent>(window, 'mousedown'),
+			fromEvent<MouseEvent>(window, 'mouseup')
+		).pipe(
+			map((event) => 
+				match(event.type)
+					.with('mousedown', () => event.button === 0 ? true : false)
+					.with('mouseup', () => false)
+					.otherwise(() => false)
+		));
 
 		// --
 
 		// -- ADD TEST ELEMENTS --
 		(async () => {
-			const el = new RectVector(svg, 500, 500);
+			const el = new RectVector(svg, 500, 500, leftMouseDown$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(svg, 500, 600);
+			const el = new RectVector(svg, 500, 600, leftMouseDown$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(svg, 500, 700);
+			const el = new RectVector(svg, 500, 700, leftMouseDown$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
@@ -95,7 +107,8 @@
 			const el = new LineVector(
 				svg, 
 				event.pageX,
-				event.pageY);
+				event.pageY,
+				leftMouseDown$);
 			const id = await randomID();
 			focusedElementId = id;
 
@@ -118,7 +131,7 @@
 		clearVertexPoints();
 		const vtxData = getVertexPointsCoords(el.value);
 		for (const pdata of vtxData) {
-			const vtxp = new VertexPoint(pdata.cx, pdata.cy, svg, el);
+			const vtxp = new VertexPoint(pdata.cx, pdata.cy, svg, el, leftMouseDown$);
 			vertexPoints.push(vtxp)
 		}
 	}
@@ -172,7 +185,7 @@
 		removeOutline();
 		
 		if (el) {
-			outlineEl = new OutlineElement(el, svg);
+			outlineEl = new OutlineElement(el, svg, leftMouseDown$);
 		} 
 	}
 

@@ -29,16 +29,25 @@ type CoordDiffs = {dx: number, dy: number};
 export abstract class ElVector {
 	value: Line | Rect | Circle;
 	abstract attrs: ElVectorAttrsSubject;
-	#subscriptionTracker: Array<Subscription> = [];
+	#subscriptions: Array<Subscription> = [];
 	/* stream of position differentials */
 	coordDiffs = new BehaviorSubject({dx: 0, dy: 0});
 
-	constructor(it: Line | Rect | Circle) {
+	constructor(
+		it: Line | Rect | Circle,
+		leftMouseDown$: Observable<boolean>
+	) {
     let mouseX: number;
     let mouseY: number;
     let prevMouseX: number;
     let prevMouseY: number;
 		let leftMouseDown = false;
+
+		this.#subscriptions.push(
+      leftMouseDown$.subscribe((down) => {
+        leftMouseDown = down;
+      })
+    );
 
     it.mousemove((event: MouseEvent) => {
       mouseX = event.pageX;
@@ -56,15 +65,8 @@ export abstract class ElVector {
       prevMouseY = mouseY;
     });
 
-    it.mousedown((event: MouseEvent) => {
-      if (event.button === 0) {
-        leftMouseDown = true;
-      }
-    });
-
     it.mouseup(() => {
 			// dragging finished
-      leftMouseDown = false;
 			this.coordDiffs.next({dx: 0, dy: 0});
     });
 
@@ -94,13 +96,13 @@ export abstract class ElVector {
 		sourceStream: Observable<TStream>,
 		mapperFunction: (stream: TStream) => Partial<ElVectorAttrs>
 	) {
-		const sub = sourceStream.subscribe((stream) => {
-      const mappedAttrs = mapperFunction(stream);
+		this.#subscriptions.push(
+      sourceStream.subscribe((stream) => {
+        const mappedAttrs = mapperFunction(stream);
 
-      this.value.attr(mappedAttrs);
-    });
-
-		this.#subscriptionTracker.push(sub);
+        this.value.attr(mappedAttrs);
+      })
+    );
 	}
 
 	/* Used to "connect" the position of elements, i.e. make the element mimic
@@ -108,11 +110,11 @@ export abstract class ElVector {
 	listenForCoordDiffs(
 		diffsStream: Observable<CoordDiffs>,
 	) {
-		const sub = diffsStream.subscribe(({dx, dy}) => {
-			this.value.dmove(dx, dy);
-		});
-
-		this.#subscriptionTracker.push(sub);
+		this.#subscriptions.push(
+      diffsStream.subscribe(({ dx, dy }) => {
+        this.value.dmove(dx, dy);
+      })
+    );
 	}
 
 	onDestroy() {
@@ -120,7 +122,7 @@ export abstract class ElVector {
 	}
 
 	clearSubscriptions() {
-		for (const sub of this.#subscriptionTracker) sub.unsubscribe();
+		for (const sub of this.#subscriptions) sub.unsubscribe();
 	}
 }
 
@@ -138,7 +140,8 @@ export class RectVector extends ElVector {
 
 	constructor(
 		svg: Svg, 
-		x: number, y: number
+		x: number, y: number,
+		leftMouseDown$: Observable<boolean>
 	) {
 		const baseWidth = 100;
 		const baseHeight = 100;
@@ -147,7 +150,7 @@ export class RectVector extends ElVector {
 			.move(x, y)
 			.fill({color: baseColor});
 		
-		super(it);
+		super(it, leftMouseDown$);
 		
 		this.attrs.next({x, y, width: baseWidth, height: baseHeight});
 	}
@@ -168,12 +171,13 @@ export class LineVector extends ElVector {
 	constructor(
 		svg: Svg, 
 		x: number, 
-		y: number
+		y: number,
+		leftMouseDown$: Observable<boolean>
 	) {
 		const it = svg.line(x, y, x, y)
 			.stroke({ color: baseColor, width: 3});
 		
-		super(it);
+		super(it, leftMouseDown$);
 
 		this.attrs.next({x1: x, y1: y, x2: x, y2: y});
 	}
@@ -193,7 +197,8 @@ export class VertexPoint extends ElVector {
 		cx: number, 
 		cy: number, 
 		svg: Svg,
-		host: ElVector
+		host: ElVector,
+		leftMouseDown$: Observable<boolean>
 	) {
 		const it = svg.circle(8).center(cx, cy).fill('lightgrey');
 
@@ -207,7 +212,7 @@ export class VertexPoint extends ElVector {
 			it.radius(4);
 		});
 
-		super(it);
+		super(it, leftMouseDown$);
 
 		this.attrs.next({cx, cy});
 		this.listenForCoordDiffs(host.coordDiffs);
@@ -226,7 +231,8 @@ export class OutlineElement extends ElVector {
 
 	constructor(
 		host: ElVector, 
-		svg: Svg
+		svg: Svg,
+		leftMouseDown$: Observable<boolean>
 	) {
 		const it = host.value.clone();
 
@@ -237,7 +243,7 @@ export class OutlineElement extends ElVector {
 
 		it.off(); // clear all event handlers coming from the host
 
-		super(it);
+		super(it, leftMouseDown$);
 
 		this.attrs.next({x: <number>it.x(), y: <number>it.y()});
 		this.listenForCoordDiffs(host.coordDiffs);
