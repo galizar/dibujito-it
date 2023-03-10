@@ -9,14 +9,14 @@
 		VertexPoint, 
 		getVertexPointsCoords, 
 		OutlineElement } from '$lib';
-	import type { ElVector } from '$lib';
+	import type { ElVector, DibitElement } from '$lib';
   import { onMount } from 'svelte';
 	import { writable } from 'svelte/store';
-	import { fromEvent, map, merge, type Observable } from 'rxjs';
+	import { fromEvent, map, merge, Subject, type Observable } from 'rxjs';
   import { match } from 'ts-pattern';
 
 	let svg: Svg; // root SVG element
-	let elements: Record<string, ElVector> = {};
+	let elements: Record<string, DibitElement> = {};
 	let elementsStore = writable(elements);
 	let elementCount = 0;
 	let toDraw: 'line' | 'rect' | 'text';
@@ -27,6 +27,9 @@
 
 	let mouseCoord$: Observable<{x: number, y: number}>;
 	let leftMouseDown$: Observable<boolean>;
+
+	// signals
+	let drawEnd$ = new Subject<void>;
 
 	$: {
 		console.log('element count:', elementCount);
@@ -84,6 +87,12 @@
 			const id = await randomID();
 			addElement(id, el);
 		})();
+
+		(async () => {
+			const el = new RectVector(svg, 900, 300, leftMouseDown$);
+			const id = await randomID();
+			addElement(id, el);
+		})();
 		// --
 	});
 
@@ -99,6 +108,7 @@
 
 		if (focusedElementId && tar.nodeName === 'svg') {
 			// unselect element when clicking on canvas
+			elements[focusedElementId].deselect();
 			focusedElementId = '';
 			clearVertexPoints();
 			removeOutline();
@@ -119,6 +129,7 @@
 			focusedElementId = toFocusId;
 
 			const el = elements[focusedElementId];
+			el.select();
 			el.value.front();
 
 			setOutline(el);
@@ -126,12 +137,11 @@
 		}
 	}
 
-	function drawVertexPoints(el: ElVector) {
+	function drawVertexPoints(el: DibitElement) {
 		
 		clearVertexPoints();
-		const vtxData = getVertexPointsCoords(el.value);
-		for (const pdata of vtxData) {
-			const vtxp = new VertexPoint(pdata.cx, pdata.cy, svg, el, leftMouseDown$);
+		const vtxPs = el.getVertexPoints(svg, leftMouseDown$);
+		for (const vtxp of vtxPs) {
 			vertexPoints.push(vtxp)
 		}
 	}
@@ -147,12 +157,13 @@
 
 	function drawStart(
 		event: MouseEvent, 
-		el: ElVector
+		el: DibitElement
 	) {
 		// update element based on mouse movement
-		el.registerStreamToAttributesMapper(
+		el.addStreamListener(
 			mouseCoord$, 
-			(stream) => ({x2: stream.x, y2: stream.y})
+			(stream) => ({x2: stream.x, y2: stream.y}),
+			drawEnd$
 		);
 
 		// when a second click is made the drawing process will stop
@@ -161,18 +172,18 @@
 		});
 	}
 	
-	function drawEnd(svg: Svg, el: ElVector) {
+  function drawEnd(svg: Svg, el: DibitElement) {
 		// remove event listeners
 		svg.off();
 
-		// remove drawing update listeners
-		el.clearSubscriptions();
+		// send draw end signal
+		drawEnd$.next();
 
 		// reset handlers
 		svg.mousedown((event: MouseEvent) => clickHandler(event));
 	}
 
-	function addElement(id: string, el: ElVector) {
+	function addElement(id: string, el: DibitElement) {
 		elementCount++;
 		elements[id] = el;
 		elementsStore.set(elements);
@@ -180,12 +191,12 @@
 		el.value.front();
 	}
 
-	function setOutline(el?: ElVector) {
+	function setOutline(el: DibitElement) {
 
 		removeOutline();
 		
 		if (el) {
-			outlineEl = new OutlineElement(el, svg, leftMouseDown$);
+			outlineEl = new OutlineElement(el, svg);
 		} 
 	}
 
