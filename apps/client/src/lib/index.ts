@@ -4,22 +4,19 @@ import {
 	Subject,
 	BehaviorSubject, 
 	takeUntil,
+	skipUntil,
 	merge,
 	repeat,
 	sample,
 	type Subscription,
-	combineLatestWith
+	combineLatestWith,
+	take,
+	finalize
 } from 'rxjs';
 import { match, P } from 'ts-pattern';
 
 const baseColor = '#cdc';
 const hoverColor = '#8a8';
-// const eventNames: 'mousedown' | 'mouseup' | 'mousemove'
-
-type PointMetadata = {
-	cx: number,
-	cy: number,
-}
 
 type ElVectorAttrs = 
 	| RectAttributes
@@ -63,7 +60,11 @@ export abstract class ElVector<TAttrs> {
 		);
   }
 
-	abstract getVertexPoints(svg: Svg, leftMouseDown$: Observable<boolean>): Array<VertexPoint>;
+	abstract getVertexPoints(
+		svg: Svg, 
+		mouseCoordDiffs$: Observable<CoordDiffs>, 
+		clickUp$: Observable<void>
+	): Array<VertexPoint>;
 
 	/**
 	 *  Used to update the element's attributes based on a source stream and a
@@ -167,71 +168,32 @@ export abstract class ElVector<TAttrs> {
 		});
 	}
 
-	addDraggingBehavior(leftMouseDown$: Observable<boolean>) {
-    let mouseX: number;
-    let mouseY: number;
-    let prevMouseX: number;
-    let prevMouseY: number;
-    let leftMouseDown = false;
-		const innerMouseDown$ = new Subject<void>(); // needed for non-selectable draggable elements (e.g. vtx points)
+	addDraggingBehavior(
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
+	) {
+		const innerMouseDown$ = new Subject<void>();
 
-    leftMouseDown$
-      .pipe(
-				takeUntil(merge(this.deselect$, this.destroy$)), 
-				repeat({ delay: () => merge(this.select$, innerMouseDown$)})
-			)
-      .subscribe((down) => (leftMouseDown = down));
+		const initialStop = new Subject<void>;
+		clickUp$ = merge(clickUp$, initialStop.asObservable());
 
-		// stop the subscription above. 
-		// the sub-unsub loop will start once the element is selected/clicked
-		// using skipUntil adds a quirky need to double-select/click
-		this.deselect$.next(); 
-		
-    this.value.mousemove((event: MouseEvent) => {
-      mouseX = event.pageX;
-      mouseY = event.pageY;
+		mouseCoordDiffs$.pipe(
+			takeUntil(clickUp$),
+			//finalize(() => this.coordDiffs$.next({dx: 0, dy: 0})),
+			repeat({ delay: () => innerMouseDown$})
+		).subscribe(({dx, dy}) => {
 
-      if (leftMouseDown) {
-        const mouseDeltaX = mouseX - prevMouseX;
-        const mouseDeltaY = mouseY - prevMouseY;
+      this.value.dmove(dx, dy);
+      this.coordDiffs$.next({ dx, dy });
+			this.moved$.next();
+			this.selfUpdate$.next();
+		})
 
-        this.value.dmove(mouseDeltaX, mouseDeltaY);
-        this.coordDiffs$.next({ dx: mouseDeltaX, dy: mouseDeltaY });
-				this.moved$.next();
-				this.selfUpdate$.next();
-      }
+		initialStop.next();
 
-      prevMouseX = mouseX;
-      prevMouseY = mouseY;
-    });
-
-		this.value.mousedown(() => innerMouseDown$.next());
-
-    this.value.mouseup(() => {
-      // dragging finished
-      this.coordDiffs$.next({ dx: 0, dy: 0 });
-    });
-
-    this.value.mouseout((event: MouseEvent) => {
-      const rTar = event.relatedTarget as HTMLElement;
-
-      if (leftMouseDown && rTar.nodeName !== 'HTML') {
-        // runs when dragging and the cursor "escapes" the area of the element
-        mouseX = event.pageX;
-        mouseY = event.pageY;
-
-        const mouseDeltaX = mouseX - prevMouseX;
-        const mouseDeltaY = mouseY - prevMouseY;
-
-        this.value.dmove(mouseDeltaX, mouseDeltaY);
-        this.coordDiffs$.next({ dx: mouseDeltaX, dy: mouseDeltaY });
-				this.moved$.next();
-				this.selfUpdate$.next();
-
-        prevMouseX = mouseX;
-        prevMouseY = mouseY;
-      }
-    });
+		this.value.mousedown(() => {
+			innerMouseDown$.next()
+		});
   }
 }
 
@@ -250,7 +212,8 @@ export class RectVector extends ElVector<RectAttributes> {
 	constructor(
 		svg: Svg, 
 		x: number, y: number,
-		leftMouseDown$: Observable<boolean>
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
 	) {
 		const baseWidth = 100;
 		const baseHeight = 100;
@@ -261,23 +224,27 @@ export class RectVector extends ElVector<RectAttributes> {
 		
 		super(it);
 
-		this.addDraggingBehavior(leftMouseDown$);
+		this.addDraggingBehavior(mouseCoordDiffs$, clickUp$);
 		this.addColorChangeOnHover(baseColor, hoverColor);
 
 		this.attrs$.next((this.attrs = {x, y, width: baseWidth, height: baseHeight}));
 	}
 
-	getVertexPoints(svg: Svg, leftMouseDown$: Observable<boolean>): Array<VertexPoint> {
+	getVertexPoints(
+		svg: Svg, 
+		mouseCoordDiffs$: Observable<CoordDiffs>, 
+		clickUp$: Observable<void>
+	): Array<VertexPoint> {
 
 		const x = <number>this.value.x();
 		const y = <number>this.value.y();
 		const width = <number>this.value.width();
 		const height = <number>this.value.height();
 
-		const tl = new VertexPoint(x,         y, svg, this, leftMouseDown$);
-    const tr = new VertexPoint(x + width, y, svg, this, leftMouseDown$);
-    const br = new VertexPoint(x + width, y + height, svg, this, leftMouseDown$);
-    const bl = new VertexPoint(x,         y + height, svg, this, leftMouseDown$);
+		const tl = new VertexPoint(x,         y, svg, this, mouseCoordDiffs$, clickUp$);
+    const tr = new VertexPoint(x + width, y, svg, this, mouseCoordDiffs$, clickUp$);
+    const br = new VertexPoint(x + width, y + height, svg, this, mouseCoordDiffs$, clickUp$);
+    const bl = new VertexPoint(x,         y + height, svg, this, mouseCoordDiffs$, clickUp$);
 
 		// -- top-left connections
 		tl.listenForCoordDiffs(tr.coordDiffs$, tr.selfUpdate$, 'y');
@@ -351,20 +318,26 @@ export class LineVector extends ElVector<LineAttributes> {
 		svg: Svg, 
 		x: number, 
 		y: number,
-		leftMouseDown$: Observable<boolean>
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
 	) {
+
 		const it = svg.line(x, y, x, y)
 			.stroke({ color: baseColor, width: 3});
 		
 		super(it);
 
-		this.addDraggingBehavior(leftMouseDown$);
+		this.addDraggingBehavior(mouseCoordDiffs$, clickUp$);
 		this.addColorChangeOnHover(baseColor, hoverColor);
 
 		this.attrs$.next({x1: x, y1: y, x2: x, y2: y});
 	}
 
-	getVertexPoints(svg: Svg, leftMouseDown$: Observable<boolean>): VertexPoint[] {
+	getVertexPoints(
+		svg: Svg, 
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
+	): VertexPoint[] {
 		return [];
 	}
 }
@@ -384,7 +357,8 @@ export class VertexPoint extends ElVector<VtxPointAttrs> {
 		cy: number, 
 		svg: Svg,
 		host: DibitElement,
-		leftMouseDown$: Observable<boolean>
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
 	) {
 		const it = svg.circle(8).center(cx, cy).fill('lightgrey');
 
@@ -400,14 +374,18 @@ export class VertexPoint extends ElVector<VtxPointAttrs> {
 
 		super(it);
 
-		this.addDraggingBehavior(leftMouseDown$);
+		this.addDraggingBehavior(mouseCoordDiffs$, clickUp$);
 
 		this.attrs$.next((this.attrs = {cx, cy}));
 		this.listenForCoordDiffs(host.coordDiffs$);
 	}
 
-	getVertexPoints(svg: Svg, leftMouseDown$: Observable<boolean>): VertexPoint[] {
-		throw Error('not implemented');
+	getVertexPoints(
+		svg: Svg, 
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
+	): VertexPoint[] {
+		return [];
 	}
 }
 
@@ -440,8 +418,12 @@ export class OutlineElement extends ElVector<OutlineElAttrs> {
 		this.listenForCoordDiffs(host.coordDiffs$);
 	}
 
-	getVertexPoints(svg: Svg, leftMouseDown$: Observable<boolean>): VertexPoint[] {
-		throw Error('not implemented');
+	getVertexPoints(
+		svg: Svg, 
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
+	): VertexPoint[] {
+		return [];
 	}
 }
 
@@ -456,7 +438,7 @@ const positionAttributeNames = (
 
 export const getVertexPointsCoords = (
   el: Line | Rect | Circle
-): Array<PointMetadata> =>
+): Array<{cx: number, cy: number}> =>
   match(el.type)
     .with('rect', () => {
 			const x = <number>el.x();

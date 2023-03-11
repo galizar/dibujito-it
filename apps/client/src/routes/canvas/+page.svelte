@@ -12,7 +12,7 @@
 	import type { ElVector, DibitElement } from '$lib';
   import { onMount } from 'svelte';
 	import { writable } from 'svelte/store';
-	import { fromEvent, map, merge, Subject, type Observable } from 'rxjs';
+	import { BehaviorSubject, fromEvent, map, merge, Subject, type Observable } from 'rxjs';
   import { match } from 'ts-pattern';
 
 	let svg: Svg; // root SVG element
@@ -26,7 +26,8 @@
 	let vertexPoints: Array<VertexPoint> = [];
 
 	let mouseCoord$: Observable<{x: number, y: number}>;
-	let leftMouseDown$: Observable<boolean>;
+	let mouseCoordDiffs$ = new BehaviorSubject({dx: 0, dy: 0});
+	let clickUp$ = new Subject<void>();
 
 	// signals
 	let drawEnd$ = new Subject<void>;
@@ -44,52 +45,55 @@
 			.size(document.body.clientWidth, document.body.clientHeight);
 
 		svg.mousedown((event: MouseEvent) => clickHandler(event));
+		window.addEventListener('mouseup', () => clickUp$.next());
 
+		// mouse coord diffs stream
+		let prevmx: number;
+		let prevmy: number;
+		window.addEventListener('mousemove', (event: MouseEvent) => {
+			const mx = event.pageX;
+			const my = event.pageY;
+
+			const dx = mx - prevmx;
+			const dy = my - prevmy;
+
+			mouseCoordDiffs$.next({dx, dy});
+
+			prevmx = mx;
+			prevmy = my;
+		})
+
+		// mouse coords stream
+		mouseCoord$ = fromEvent<MouseEvent>(window, 'mousemove')
+			.pipe(map(event => ({x: event.pageX, y: event.pageY})));
+
+		// window resize observer
 		const clientResizeObserver = new ResizeObserver(() => {
 			svg.size(document.body.clientWidth, document.body.clientHeight);
 		});
-
 		clientResizeObserver.observe(document.body);
-
-		// -- streams
-
-		mouseCoord$ = fromEvent<MouseEvent>(window, 'mousemove')
-			.pipe(map(event => ({x: event.pageX, y: event.pageY})));
-		
-		leftMouseDown$ = merge(
-			fromEvent<MouseEvent>(window, 'mousedown'),
-			fromEvent<MouseEvent>(window, 'mouseup')
-		).pipe(
-			map((event) => 
-				match(event.type)
-					.with('mousedown', () => event.button === 0 ? true : false)
-					.with('mouseup', () => false)
-					.otherwise(() => false)
-		));
-
-		// --
 
 		// -- ADD TEST ELEMENTS --
 		(async () => {
-			const el = new RectVector(svg, 500, 500, leftMouseDown$);
+			const el = new RectVector(svg, 500, 500, mouseCoordDiffs$, clickUp$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(svg, 500, 600, leftMouseDown$);
+			const el = new RectVector(svg, 500, 600, mouseCoordDiffs$, clickUp$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(svg, 500, 700, leftMouseDown$);
+			const el = new RectVector(svg, 500, 700, mouseCoordDiffs$, clickUp$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
 
 		(async () => {
-			const el = new RectVector(svg, 900, 300, leftMouseDown$);
+			const el = new RectVector(svg, 900, 300, mouseCoordDiffs$, clickUp$);
 			const id = await randomID();
 			addElement(id, el);
 		})();
@@ -118,7 +122,8 @@
 				svg, 
 				event.pageX,
 				event.pageY,
-				leftMouseDown$);
+				mouseCoordDiffs$, 
+				clickUp$);
 			const id = await randomID();
 			focusedElementId = id;
 
@@ -140,7 +145,7 @@
 	function drawVertexPoints(el: DibitElement) {
 		
 		clearVertexPoints();
-		const vtxPs = el.getVertexPoints(svg, leftMouseDown$);
+		const vtxPs = el.getVertexPoints(svg, mouseCoordDiffs$, clickUp$);
 		for (const vtxp of vtxPs) {
 			vertexPoints.push(vtxp)
 		}
