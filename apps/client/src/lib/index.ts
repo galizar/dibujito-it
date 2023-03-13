@@ -4,7 +4,7 @@ import {
 	Subject,
 	BehaviorSubject, 
 	takeUntil,
-	skipUntil,
+	startWith,
 	merge,
 	repeat,
 	sample,
@@ -23,6 +23,12 @@ type ElVectorAttrs =
 	| LineAttributes
 	| VtxPointAttrs
 	| OutlineElAttrs;
+
+type ElVectorAttrs$ =
+	| Observable<RectAttributes>
+	| Observable<LineAttributes>
+  | Observable<VtxPointAttrs>
+  | Observable<OutlineElAttrs>;
 
 export type DibitElement =
 	| ElVector<RectAttributes>
@@ -72,20 +78,23 @@ export abstract class ElVector<TAttrs> {
 	 * 
 	 * @param sourceStream 
 	 * @param mapperFunction 
-	 * @param samplingSignal - optional signal for selective listening.
+	 * @param options
+	 * @param sample$ - optional signal for selective listening.
 	 * @param stop$ - optional subscription-stopping signal. subscriptions stop by
 	 * default on this.destroy$
 	 */
 	addStreamListener<TStream>(
 		sourceStream: Observable<TStream>,
 		mapperFunction: (stream: TStream) => Partial<ElVectorAttrs>,
-		samplingSignal?: Observable<void>,
-		stop$ = new Subject<void>(),
+		options: {
+			sample$?: Observable<void>,
+			stop$: Observable<void>
+		} = { stop$: new Observable<void>()}
 	) {
     sourceStream
 			.pipe(
-				takeUntil(merge(this.destroy$, stop$)),
-				sample(samplingSignal ?? sourceStream)
+				takeUntil(merge(this.destroy$, options.stop$)),
+				sample(options.sample$ ?? sourceStream)
 			)
 		  .subscribe((stream) => {
         const mappedAttrs = mapperFunction(stream);
@@ -173,13 +182,12 @@ export abstract class ElVector<TAttrs> {
 		clickUp$: Observable<void>
 	) {
 		const innerMouseDown$ = new Subject<void>();
+		const initialStop = new Subject<void>();
 
-		const initialStop = new Subject<void>;
 		clickUp$ = merge(clickUp$, initialStop.asObservable());
 
 		mouseCoordDiffs$.pipe(
 			takeUntil(clickUp$),
-			//finalize(() => this.coordDiffs$.next({dx: 0, dy: 0})),
 			repeat({ delay: () => innerMouseDown$})
 		).subscribe(({dx, dy}) => {
 
@@ -187,12 +195,12 @@ export abstract class ElVector<TAttrs> {
       this.coordDiffs$.next({ dx, dy });
 			this.moved$.next();
 			this.selfUpdate$.next();
-		})
+		});
 
 		initialStop.next();
 
 		this.value.mousedown(() => {
-			innerMouseDown$.next()
+			innerMouseDown$.next();
 		});
   }
 }
@@ -257,8 +265,11 @@ export class RectVector extends ElVector<RectAttributes> {
 				width: this.attrs.width - dx, 
 				height: this.attrs.height - dy 
 			}), 
-			tl.selfUpdate$, 
-			tl.destroy$);
+			{
+				sample$: tl.selfUpdate$,
+				stop$: tl.destroy$
+			});
+
 
 		// -- top-right connections
 		tr.listenForCoordDiffs(br.coordDiffs$, br.selfUpdate$, 'x' );
@@ -270,8 +281,10 @@ export class RectVector extends ElVector<RectAttributes> {
 				width: this.attrs.width + dx, 
 				height: this.attrs.height - dy
 			}), 
-			tr.selfUpdate$, 
-			tr.destroy$);
+			{
+				sample$: tr.selfUpdate$,
+				stop$: tr.destroy$
+			});
 
 		// -- bottom-right connections
 		br.listenForCoordDiffs(tr.coordDiffs$, tr.selfUpdate$, 'x');
@@ -282,8 +295,10 @@ export class RectVector extends ElVector<RectAttributes> {
 				width: this.attrs.width + dx, 
 				height: this.attrs.height + dy 
 			}), 
-			br.selfUpdate$, 
-			br.destroy$);
+			{
+				sample$: br.selfUpdate$,
+				stop$: br.destroy$
+			});
 
 		// -- bottom-left connections
 		bl.listenForCoordDiffs(tl.coordDiffs$, tl.selfUpdate$, 'x');
@@ -295,8 +310,10 @@ export class RectVector extends ElVector<RectAttributes> {
 				width: this.attrs.width - dx, 
 				height: this.attrs.height + dy 
 			}), 
-			bl.selfUpdate$, 
-			bl.destroy$);
+			{
+				sample$: bl.selfUpdate$,
+				stop$: bl.destroy$
+			});
 
 		return [tl, tr, br, bl];
 	}
@@ -377,7 +394,7 @@ export class VertexPoint extends ElVector<VtxPointAttrs> {
 		this.addDraggingBehavior(mouseCoordDiffs$, clickUp$);
 
 		this.attrs$.next((this.attrs = {cx, cy}));
-		this.listenForCoordDiffs(host.coordDiffs$);
+		this.listenForCoordDiffs(host.coordDiffs$, host.selfUpdate$);
 	}
 
 	getVertexPoints(
@@ -415,7 +432,7 @@ export class OutlineElement extends ElVector<OutlineElAttrs> {
 		super(it);
 
 		this.attrs$.next({x: <number>it.x(), y: <number>it.y()});
-		this.listenForCoordDiffs(host.coordDiffs$);
+		this.addTransformationsListener(host);
 	}
 
 	getVertexPoints(
@@ -424,6 +441,15 @@ export class OutlineElement extends ElVector<OutlineElAttrs> {
 		clickUp$: Observable<void>
 	): VertexPoint[] {
 		return [];
+	}
+
+	addTransformationsListener(host: DibitElement) {
+		merge(host.coordDiffs$, host.attrs$)
+			.subscribe(() => {
+				this.value.attr(host.value.attr());
+				this.value.stroke({ color: 'grey', width: 6});
+				this.value.attr('stroke-linecap', 'round');
+			});
 	}
 }
 

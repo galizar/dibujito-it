@@ -25,8 +25,8 @@
 	let outlineEl: OutlineElement | undefined; 
 	let vertexPoints: Array<VertexPoint> = [];
 
-	let mouseCoord$: Observable<{x: number, y: number}>;
-	let mouseCoordDiffs$ = new BehaviorSubject({dx: 0, dy: 0});
+	let mouseCoord$ = new Subject<{x: number, y: number}>();
+	let mouseCoordDiffs$ = new Subject<{dx: number, dy: number}>();
 	let clickUp$ = new Subject<void>();
 
 	// signals
@@ -57,15 +57,12 @@
 			const dx = mx - prevmx;
 			const dy = my - prevmy;
 
+			mouseCoord$.next({x: mx, y: my});
 			mouseCoordDiffs$.next({dx, dy});
 
 			prevmx = mx;
 			prevmy = my;
-		})
-
-		// mouse coords stream
-		mouseCoord$ = fromEvent<MouseEvent>(window, 'mousemove')
-			.pipe(map(event => ({x: event.pageX, y: event.pageY})));
+		});
 
 		// window resize observer
 		const clientResizeObserver = new ResizeObserver(() => {
@@ -168,7 +165,7 @@
 		el.addStreamListener(
 			mouseCoord$, 
 			(stream) => ({x2: stream.x, y2: stream.y}),
-			drawEnd$
+			{ stop$: drawEnd$ }
 		);
 
 		// when a second click is made the drawing process will stop
