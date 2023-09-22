@@ -1,4 +1,4 @@
-import type { Svg, Rect, Line, Circle } from '@svgdotjs/svg.js';
+import type { Svg, Rect, Line, Circle, Path } from '@svgdotjs/svg.js';
 import { 
 	Observable, 
 	Subject,
@@ -22,24 +22,24 @@ type ElVectorAttrs =
 	| RectAttributes
 	| LineAttributes
 	| VtxPointAttrs
-	| OutlineElAttrs;
 
 type ElVectorAttrs$ =
 	| Observable<RectAttributes>
 	| Observable<LineAttributes>
   | Observable<VtxPointAttrs>
-  | Observable<OutlineElAttrs>;
 
 export type DibitElement =
 	| ElVector<RectAttributes>
 	| ElVector<LineAttributes>
 	| ElVector<VtxPointAttrs>
-	| ElVector<OutlineElAttrs>
+	| ElVector<FreehandAttrs>;
 
 type CoordDiffs = {dx: number, dy: number};
 
+type BaseVector = Line | Rect | Circle | Path;
+
 export abstract class ElVector<TAttrs> {
-	value: Line | Rect | Circle;
+	value: BaseVector;
 	abstract attrs: TAttrs;
 	abstract attrs$: BehaviorSubject<TAttrs>;
 	/** stream of position differentials */
@@ -57,7 +57,7 @@ export abstract class ElVector<TAttrs> {
 	leftMouseDown = false;
 
 	constructor(
-		el: Line | Rect | Circle,
+		el: BaseVector 
 	) {
 		this.value = el;
 
@@ -66,11 +66,14 @@ export abstract class ElVector<TAttrs> {
 		);
   }
 
-	abstract getVertexPoints(
+	getVertexPoints(
 		svg: Svg, 
 		mouseCoordDiffs$: Observable<CoordDiffs>, 
 		clickUp$: Observable<void>
-	): Array<VertexPoint>;
+	): Array<VertexPoint> {
+		console.error('this method is not implemented');
+		return [];
+	};
 
 	/**
 	 *  Used to update the element's attributes based on a source stream and a
@@ -78,9 +81,8 @@ export abstract class ElVector<TAttrs> {
 	 * 
 	 * @param sourceStream 
 	 * @param mapperFunction 
-	 * @param options
-	 * @param sample$ - optional signal for selective listening.
-	 * @param stop$ - optional subscription-stopping signal. subscriptions stop by
+	 * @param options.sample$ - optional signal for selective listening.
+	 * @param options.stop$ - optional subscription-stopping signal. subscriptions stop by
 	 * default on this.destroy$
 	 */
 	addStreamListener<TStream>(
@@ -88,12 +90,12 @@ export abstract class ElVector<TAttrs> {
 		mapperFunction: (stream: TStream) => Partial<ElVectorAttrs>,
 		options: {
 			sample$?: Observable<void>,
-			stop$: Observable<void>
-		} = { stop$: new Observable<void>()}
+			stop$?: Observable<void>
+		} = { }
 	) {
     sourceStream
 			.pipe(
-				takeUntil(merge(this.destroy$, options.stop$)),
+				takeUntil(merge(this.destroy$, options.stop$ ?? new Observable<void>)),
 				sample(options.sample$ ?? sourceStream)
 			)
 		  .subscribe((stream) => {
@@ -238,7 +240,7 @@ export class RectVector extends ElVector<RectAttributes> {
 		this.attrs$.next((this.attrs = {x, y, width: baseWidth, height: baseHeight}));
 	}
 
-	getVertexPoints(
+	override getVertexPoints(
 		svg: Svg, 
 		mouseCoordDiffs$: Observable<CoordDiffs>, 
 		clickUp$: Observable<void>
@@ -255,6 +257,9 @@ export class RectVector extends ElVector<RectAttributes> {
     const bl = new VertexPoint(x,         y + height, svg, this, mouseCoordDiffs$, clickUp$);
 
 		// -- top-left connections
+		// notice that the sampling signal is necessary to avoid updating by changes
+		// in elements "not connected" to a given element. e.g. the top left vtx point should only
+		// be updated by changes in the top right and bottom left vtx points.
 		tl.listenForCoordDiffs(tr.coordDiffs$, tr.selfUpdate$, 'y');
 		tl.listenForCoordDiffs(bl.coordDiffs$, bl.selfUpdate$, 'x');
 		this.addStreamListener(
@@ -269,7 +274,6 @@ export class RectVector extends ElVector<RectAttributes> {
 				sample$: tl.selfUpdate$,
 				stop$: tl.destroy$
 			});
-
 
 		// -- top-right connections
 		tr.listenForCoordDiffs(br.coordDiffs$, br.selfUpdate$, 'x' );
@@ -350,13 +354,86 @@ export class LineVector extends ElVector<LineAttributes> {
 		this.attrs$.next({x1: x, y1: y, x2: x, y2: y});
 	}
 
-	getVertexPoints(
+	override getVertexPoints(
 		svg: Svg, 
 		mouseCoordDiffs$: Observable<CoordDiffs>,
 		clickUp$: Observable<void>
 	): VertexPoint[] {
-		return [];
+
+		const x1 = this.value.attr('x1');
+		const y1 = this.value.attr('y1')
+		const x2 = this.value.attr('x2');
+		const y2 = this.value.attr('y2')
+
+		const start = new VertexPoint(x1, y1, svg, this, mouseCoordDiffs$, clickUp$);
+		const end = new VertexPoint(x2, y2, svg, this, mouseCoordDiffs$, clickUp$);
+
+		this.addStreamListener(
+			start.attrs$, 
+			({cx, cy}) => ({ x1: cx, y1: cy}), 
+			{
+				sample$: start.selfUpdate$,
+				stop$: start.destroy$
+			}
+		);
+
+		this.addStreamListener(
+			end.attrs$, 
+			({cx, cy}) => ({ x2: cx, y2: cy}), 
+			{
+				sample$: end.selfUpdate$,
+				stop$: end.destroy$
+			}
+		);
+		
+		return [start, end];
 	}
+}
+
+type FreehandAttrs = {
+	d: string
+}
+
+export class FreehandVector extends ElVector<FreehandAttrs> {
+
+	attrs = {d: ''};
+	attrs$ = new BehaviorSubject(this.attrs);
+
+	constructor(
+		svg: Svg, 
+		x: number, y: number,
+		mouseCoordDiffs$: Observable<CoordDiffs>,
+		clickUp$: Observable<void>
+	) {
+
+		const pathString = `M ${x} ${y}`;
+		const el = svg.path(pathString);
+
+		el.fill('transparent');
+		el.stroke({width: 2, color: 'black'});
+
+		super(el);
+
+		this.attrs$.next((this.attrs = {d: pathString}));
+
+		this.addDraggingBehavior(mouseCoordDiffs$, clickUp$);
+	}
+
+	appendPoint(x: number, y: number) {
+		this.attrs.d += ` L ${x} ${y}`;
+		(<Path>this.value).plot(this.attrs.d);
+
+		this.attrs$.next(this.attrs);
+	}
+
+	addTestCurveTo(x: number, y: number) {
+		// this.attrs.d += ` C ${x} ${y}, ${x+50} ${y+25}, ${x+80} ${y+25}`;
+		this.attrs.d += ` C ${x} ${y}, ${x+20} ${y}, ${x+30} ${y-10}`;
+		(<Path>this.value).plot(this.attrs.d);
+
+		this.attrs$.next(this.attrs);
+	}
+
 }
 
 type VtxPointAttrs = {
@@ -396,24 +473,11 @@ export class VertexPoint extends ElVector<VtxPointAttrs> {
 		this.attrs$.next((this.attrs = {cx, cy}));
 		this.listenForCoordDiffs(host.coordDiffs$, host.selfUpdate$);
 	}
-
-	getVertexPoints(
-		svg: Svg, 
-		mouseCoordDiffs$: Observable<CoordDiffs>,
-		clickUp$: Observable<void>
-	): VertexPoint[] {
-		return [];
-	}
 }
 
-type OutlineElAttrs = {
-	x: number,
-	y: number,
-}
+export class OutlineElement extends ElVector<{}> {
 
-export class OutlineElement extends ElVector<OutlineElAttrs> {
-
-	attrs = {x: -1, y: -1};
+	attrs = Object.create(null);
 	attrs$ = new BehaviorSubject(this.attrs);
 
 	constructor(
@@ -435,14 +499,6 @@ export class OutlineElement extends ElVector<OutlineElAttrs> {
 		this.addTransformationsListener(host);
 	}
 
-	getVertexPoints(
-		svg: Svg, 
-		mouseCoordDiffs$: Observable<CoordDiffs>,
-		clickUp$: Observable<void>
-	): VertexPoint[] {
-		return [];
-	}
-
 	addTransformationsListener(host: DibitElement) {
 		merge(host.coordDiffs$, host.attrs$)
 			.subscribe(() => {
@@ -454,7 +510,7 @@ export class OutlineElement extends ElVector<OutlineElAttrs> {
 }
 
 const positionAttributeNames = (
-	el: Line | Rect | Circle
+	el: BaseVector 
 ): Array<string> =>
 	match(el.type)
 		.with('rect', () => ['x', 'y'])
